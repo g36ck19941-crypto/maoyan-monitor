@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>猫眼监控控制面板</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+            background: #f5f7fb;
+            margin: 0;
+            color: #333;
+        }
+        header {
+            background: #1f2937;
+            color: #fff;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        header h1 { font-size: 20px; margin: 0; }
+        header .status { font-size: 14px; }
+
+        .container {
+            max-width: 1100px;
+            margin: 24px auto;
+            padding: 0 16px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+        .card {
+            background: #fff;
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: 0 2px 6px rgba(0,0,0,.06);
+        }
+        .card.full { grid-column: 1 / -1; }
+        .card h2 {
+            margin: 0 0 12px;
+            font-size: 16px;
+            border-left: 4px solid #f43f5e;
+            padding-left: 8px;
+        }
+
+        label { display: block; font-size: 13px; margin: 8px 0 4px; }
+        input, select {
+            width: 100%;
+            padding: 7px 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+        .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 12px; }
+
+        button {
+            cursor: pointer;
+            border: none;
+            border-radius: 6px;
+            padding: 8px 14px;
+            font-size: 14px;
+            background: #2563eb;
+            color: #fff;
+        }
+        button.secondary { background: #6b7280; }
+        button.danger { background: #dc2626; }
+        button.success { background: #16a34a; }
+        button:disabled { opacity: .5; cursor: not-allowed; }
+
+        .btn-group { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+        .monitor-status {
+            font-size: 14px;
+            padding: 6px 12px;
+            border-radius: 999px;
+            background: #f3f4f6;
+            display: inline-block;
+            margin-bottom: 8px;
+        }
+        .monitor-status.running { background: #dcfce7; color: #166534; }
+        .monitor-status.stopped { background: #fee2e2; color: #991b1b; }
+
+        pre.log {
+            background: #111827;
+            color: #d1fae5;
+            padding: 12px;
+            border-radius: 8px;
+            max-height: 260px;
+            overflow: auto;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-break: break-all;
+            margin: 8px 0 0;
+        }
+        .msg { font-size: 13px; margin-top: 6px; min-height: 18px; }
+        .msg.ok { color: #16a34a; }
+        .msg.err { color: #dc2626; }
+        textarea { width: 100%; padding: 7px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; }
+        .span2 { grid-column: span 2; }
+        .cinema-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr auto;
+            gap: 8px;
+            margin-bottom: 8px;
+            align-items: center;
+        }
+        .cinema-row input { padding: 6px 8px; }
+        .checkbox { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+        .checkbox input { width: auto; }
+        @media (max-width: 720px) {
+            .container { grid-template-columns: 1fr; }
+            .row, .row3 { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>🎬 猫眼监控控制面板</h1>
+    <div class="status" id="monitorBadge">监控状态：未知</div>
+</header>
+
+<div class="container">
+
+    <!-- 配置编辑 -->
+    <div class="card full">
+        <h2>监控配置</h2>
+        <div class="row">
+            <div>
+                <label>二合一 URL（可选）</label>
+                <input id="url" placeholder="https://www.maoyan.com/cinemas/...?movieId=...">
+            </div>
+            <div>
+                <label>轮询间隔（秒）</label>
+                <input id="interval_seconds" type="number" min="30" step="10">
+            </div>
+        </div>
+        <div class="row">
+            <div>
+                <label>电影 URL</label>
+                <input id="movie_url" placeholder="https://www.maoyan.com/films/...">
+            </div>
+            <div>
+                <label>电影名（留空自动获取）</label>
+                <input id="movie_name" placeholder="留空自动从URL获取">
+            </div>
+        </div>
+        <div>
+            <label>影院列表</label>
+            <div id="cinemaList"></div>
+            <button type="button" class="secondary" onclick="addCinema()">＋ 添加影院</button>
+        </div>
+        <div class="row3">
+            <div>
+                <label>Server酱 SendKey</label>
+                <input id="serverchan_send_key" placeholder="SCT...">
+            </div>
+            <div>
+                <label>最佳座位（排, 座）</label>
+                <input id="best_seat" placeholder="7,5">
+            </div>
+            <div>
+                <label>购买张数</label>
+                <input type="number" id="ticket_count" min="1" max="6" value="1">
+            </div>
+        </div>
+        <div class="row3">
+            <div>
+                <label>连座规则</label>
+                <select id="seat_rule">
+                    <option value="any">不强制连座</option>
+                    <option value="consecutive">必须连座</option>
+                </select>
+            </div>
+            <div>
+                <label>最早场次时间</label>
+                <input id="preferred_start_time" placeholder="18:00 或留空">
+            </div>
+            <div>
+                <label>最晚场次时间</label>
+                <input id="preferred_end_time" placeholder="21:00 或留空">
+            </div>
+        </div>
+        <div class="row3">
+            <div>
+                <label>影厅关键词</label>
+                <input id="preferred_hall_keyword" placeholder="IMAX / 激光 / 杜比">
+            </div>
+            <div class="span2">
+                <label>每张票的优先座位（每行一个：排,座，可留空）</label>
+                <textarea id="preferred_seats" rows="3" placeholder="7,5&#10;7,6&#10;8,5"></textarea>
+            </div>
+        </div>
+        <div class="row">
+            <div>
+                <label>优先日期（可选）</label>
+                <input type="date" id="preferred_date">
+            </div>
+            <div>
+                <label>自动顺延天数（当天无座时）</label>
+                <input type="number" id="max_search_dates" min="1" max="14" value="3">
+            </div>
+            <div>
+                <label>可接受座位半径</label>
+                <input type="number" id="acceptable_radius" min="0" max="20" value="5">
+            </div>
+        </div>
+        <div class="checkbox">
+            <input type="checkbox" id="auto_select_seat">
+            <label for="auto_select_seat">自动占座</label>
+            <input type="checkbox" id="submit_order" style="margin-left:20px;">
+            <label for="submit_order">选座后提交订单（不支付）</label>
+        </div>
+        <div class="btn-group">
+            <button onclick="saveConfig()">保存配置</button>
+            <button class="success" onclick="autoFetchNames()">从URL自动识别名称</button>
+            <button class="secondary" onclick="resetState()">重置重复通知标记</button>
+        </div>
+        <div class="msg" id="configMsg"></div>
+    </div>
+
+    <!-- 监控控制 -->
+    <div class="card">
+        <h2>监控运行</h2>
+        <div id="monitorStatus" class="monitor-status stopped">未运行</div>
+        <div class="btn-group">
+            <button class="success" onclick="startMonitor()">▶ 启动监控</button>
+            <button class="danger" onclick="stopMonitor()">■ 停止监控</button>
+        </div>
+        <div class="msg" id="monitorMsg"></div>
+        <pre class="log" id="monitorLog">暂无日志</pre>
+    </div>
+
+    <!-- 工具运行 -->
+    <div class="card">
+        <h2>选座工具</h2>
+        <label>场次页 URL</label>
+        <input id="toolUrl" placeholder="https://www.maoyan.com/cinema/...?movieId=...">
+        <label>Profile 目录（可选）</label>
+        <input id="toolProfile" placeholder="profile_test">
+        <div class="btn-group">
+            <button onclick="runTool('seat_map')">🗺 获取座位图</button>
+            <button onclick="runTool('test_seat')">🔍 调试座位定位</button>
+            <button class="secondary" onclick="stopTool('seat_map')">停止座位图</button>
+            <button class="secondary" onclick="stopTool('test_seat')">停止调试</button>
+        </div>
+        <div class="msg" id="toolMsg"></div>
+        <pre class="log" id="toolLog">暂无日志</pre>
+    </div>
+
+</div>
+
+<script>
+    let currentTool = 'seat_map';
+
+    async function api(path, method = 'GET', body = null) {
+        const opts = { method, headers: {} };
+        if (body !== null) {
+            opts.headers['Content-Type'] = 'application/json';
+            opts.body = JSON.stringify(body);
+        }
+        const resp = await fetch(path, opts);
+        if (!resp.ok) {
+            let text = '';
+            try { const data = await resp.json(); text = data.error || ''; } catch (e) {}
+            throw new Error(text || ('HTTP ' + resp.status));
+        }
+        return resp.json();
+    }
+
+    function renderCinemaList(cinemas) {
+        const wrap = document.getElementById('cinemaList');
+        wrap.innerHTML = '';
+        if (!cinemas || !cinemas.length) cinemas = [{ url: '', name: '' }];
+        cinemas.forEach((item, idx) => {
+            const div = document.createElement('div');
+            div.className = 'cinema-row';
+            div.innerHTML = `
+                <input class="cinema-url" placeholder="https://www.maoyan.com/cinema/..." value="${item.url || ''}">
+                <input class="cinema-name" placeholder="影院名（留空自动获取）" value="${item.name || ''}">
+                <button class="danger" onclick="removeCinema(this)">删除</button>
+            `;
+            wrap.appendChild(div);
+        });
+    }
+
+    function addCinema() {
+        const wrap = document.getElementById('cinemaList');
+        const div = document.createElement('div');
+        div.className = 'cinema-row';
+        div.innerHTML = `
+            <input class="cinema-url" placeholder="https://www.maoyan.com/cinema/...">
+            <input class="cinema-name" placeholder="影院名（留空自动获取）">
+            <button class="danger" onclick="removeCinema(this)">删除</button>
+        `;
+        wrap.appendChild(div);
+    }
+
+    function removeCinema(btn) {
+        const row = btn.closest('.cinema-row');
+        if (row) row.remove();
+        const wrap = document.getElementById('cinemaList');
+        if (!wrap.children.length) addCinema();
+    }
+
+    function collectCinemas() {
+        const rows = document.querySelectorAll('#cinemaList .cinema-row');
+        const list = [];
+        rows.forEach(row => {
+            const url = row.querySelector('.cinema-url').value.trim();
+            const name = row.querySelector('.cinema-name').value.trim();
+            if (url) list.push({ url, name });
+        });
+        return list;
+    }
+
+    async function loadConfig() {
+        try {
+            const cfg = await api('/api/config');
+            document.getElementById('url').value = cfg.url || '';
+            document.getElementById('movie_url').value = cfg.movie_url || '';
+            document.getElementById('movie_name').value = cfg.movie_name || '';
+            renderCinemaList(cfg.cinemas || (cfg.cinema_url ? [{ url: cfg.cinema_url, name: cfg.cinema_name || '' }] : []));
+            document.getElementById('serverchan_send_key').value = cfg.serverchan_send_key || '';
+            document.getElementById('interval_seconds').value = cfg.interval_seconds || 300;
+            document.getElementById('ticket_count').value = cfg.ticket_count || 1;
+            document.getElementById('seat_rule').value = cfg.seat_rule || 'any';
+            document.getElementById('preferred_start_time').value = cfg.preferred_start_time || '';
+            document.getElementById('preferred_end_time').value = cfg.preferred_end_time || '';
+            document.getElementById('preferred_hall_keyword').value = cfg.preferred_hall_keyword || '';
+            document.getElementById('preferred_date').value = cfg.preferred_date || '';
+            document.getElementById('max_search_dates').value = cfg.max_search_dates || 3;
+            document.getElementById('acceptable_radius').value = cfg.acceptable_radius ?? cfg.max_radius ?? 5;
+            const [r, c] = (cfg.best_seat || [7,5]);
+            document.getElementById('best_seat').value = (r !== undefined ? r : 7) + ',' + (c !== undefined ? c : 5);
+            const seats = cfg.seats || [];
+            document.getElementById('preferred_seats').value = seats.map(s => s.join(',')).join('\n');
+            document.getElementById('auto_select_seat').checked = !!cfg.auto_select_seat;
+            document.getElementById('submit_order').checked = !!cfg.submit_order;
+            showMsg('configMsg', '配置已加载', true);
+        } catch (e) {
+            showMsg('configMsg', '加载失败: ' + e.message, false);
+        }
+    }
+
+    async function saveConfig() {
+        const best = document.getElementById('best_seat').value.split(',');
+        const seatsText = document.getElementById('preferred_seats').value.trim();
+        const seats = seatsText
+            ? seatsText.split('\n')
+                .map(line => line.split(',').map(x => parseInt(x.trim(), 10)))
+                .filter(arr => arr.length >= 2 && !isNaN(arr[0]) && !isNaN(arr[1]))
+                .map(arr => [arr[0], arr[1]])
+            : [];
+        const cfg = {
+            url: document.getElementById('url').value.trim(),
+            movie_url: document.getElementById('movie_url').value.trim(),
+            movie_name: document.getElementById('movie_name').value.trim(),
+            cinemas: collectCinemas(),
+            serverchan_send_key: document.getElementById('serverchan_send_key').value.trim(),
+            interval_seconds: parseInt(document.getElementById('interval_seconds').value, 10) || 300,
+            ticket_count: parseInt(document.getElementById('ticket_count').value, 10) || 1,
+            seat_rule: document.getElementById('seat_rule').value,
+            preferred_start_time: document.getElementById('preferred_start_time').value.trim().replace('：', ':'),
+            preferred_end_time: document.getElementById('preferred_end_time').value.trim().replace('：', ':'),
+            preferred_hall_keyword: document.getElementById('preferred_hall_keyword').value.trim(),
+            preferred_date: document.getElementById('preferred_date').value,
+            max_search_dates: parseInt(document.getElementById('max_search_dates').value, 10) || 3,
+            acceptable_radius: parseInt(document.getElementById('acceptable_radius').value, 10) || 5,
+            best_seat: [parseInt(best[0],10) || 7, parseInt(best[1],10) || 5],
+            seats: seats,
+            auto_select_seat: document.getElementById('auto_select_seat').checked,
+            submit_order: document.getElementById('submit_order').checked,
+            headless: false,
+            user_data_dir: "./profile",
+            keywords: ["选座购票", "立即购票", "购买", "预售", "点映"],
+            max_radius: 5,
+        };
+        try {
+            await api('/api/config', 'POST', cfg);
+            showMsg('configMsg', '保存成功', true);
+        } catch (e) {
+            showMsg('configMsg', '保存失败: ' + e.message, false);
+        }
+    }
+
+    async function autoFetchNames() {
+        const movieUrl = document.getElementById('movie_url').value.trim();
+        const cinemaRows = document.querySelectorAll('#cinemaList .cinema-row');
+        const cinemas = [];
+        cinemaRows.forEach(row => {
+            const url = row.querySelector('.cinema-url').value.trim();
+            if (url) cinemas.push({ url, name: '' });
+        });
+
+        if (!movieUrl && cinemas.length === 0) {
+            showMsg('configMsg', '请先填写电影 URL 或影院 URL', false);
+            return;
+        }
+
+        showMsg('configMsg', '正在从 URL 自动识别名称...', true);
+        try {
+            const data = await api('/api/fetch-names', 'POST', { movie_url: movieUrl, cinemas });
+            if (data.ok) {
+                if (data.movie_name) document.getElementById('movie_name').value = data.movie_name;
+                const rows = document.querySelectorAll('#cinemaList .cinema-row');
+                const names = data.cinemas || [];
+                rows.forEach((row, idx) => {
+                    if (names[idx] && names[idx].name) {
+                        row.querySelector('.cinema-name').value = names[idx].name;
+                    }
+                });
+                showMsg('configMsg', '名称识别完成，请检查是否正确', true);
+            } else {
+                showMsg('configMsg', '识别失败: ' + (data.error || ''), false);
+            }
+        } catch (e) {
+            showMsg('configMsg', '识别失败: ' + e.message, false);
+        }
+    }
+
+    // 电影 URL / 影院 URL 修改后自动尝试识别名称
+    document.addEventListener('change', function(e) {
+        if (e.target && (e.target.id === 'movie_url' || (e.target.classList && e.target.classList.contains('cinema-url')))) {
+            setTimeout(autoFetchNames, 300);
+        }
+    });
+
+    async function resetState() {
+        try {
+            await api('/api/state/reset', 'POST');
+            showMsg('configMsg', '已清除重复通知标记', true);
+        } catch (e) {
+            showMsg('configMsg', '重置失败: ' + e.message, false);
+        }
+    }
+
+    function showMsg(id, text, ok) {
+        const el = document.getElementById(id);
+        el.textContent = text;
+        el.className = 'msg ' + (ok ? 'ok' : 'err');
+    }
+
+    async function refreshStatus() {
+        try {
+            const st = await api('/api/status');
+            const mon = st.monitor || {};
+            const badge = document.getElementById('monitorBadge');
+            const box = document.getElementById('monitorStatus');
+            if (mon.running) {
+                badge.textContent = '监控状态：运行中 (PID ' + mon.pid + ')';
+                box.textContent = '🟢 运行中';
+                box.className = 'monitor-status running';
+            } else {
+                badge.textContent = '监控状态：未运行';
+                box.textContent = '⚪ 未运行';
+                box.className = 'monitor-status stopped';
+            }
+            if (mon.log) document.getElementById('monitorLog').textContent = mon.log;
+            const sm = st.seat_map || {};
+            const ts = st.test_seat || {};
+            const tool = currentTool === 'seat_map' ? sm : ts;
+            if (tool && tool.log) document.getElementById('toolLog').textContent = tool.log;
+        } catch (e) {}
+    }
+
+    async function startMonitor() {
+        try {
+            await api('/api/monitor/start', 'POST');
+            showMsg('monitorMsg', '已启动监控', true);
+        } catch (e) {
+            showMsg('monitorMsg', '启动失败: ' + e.message, false);
+        }
+    }
+
+    async function stopMonitor() {
+        try {
+            await api('/api/monitor/stop', 'POST');
+            showMsg('monitorMsg', '已发送停止指令', true);
+        } catch (e) {
+            showMsg('monitorMsg', '停止失败: ' + e.message, false);
+        }
+    }
+
+    async function runTool(tool) {
+        currentTool = tool;
+        const url = document.getElementById('toolUrl').value.trim();
+        const profile = document.getElementById('toolProfile').value.trim();
+        if (!url) {
+            showMsg('toolMsg', '请填写场次页 URL', false);
+            return;
+        }
+        showMsg('toolMsg', '正在启动 ' + tool + ' ...', true);
+        document.getElementById('toolLog').textContent = '等待输出...';
+        try {
+            await api('/api/tool/run', 'POST', { tool, url, profile });
+            showMsg('toolMsg', tool + ' 已启动', true);
+        } catch (e) {
+            showMsg('toolMsg', '启动失败: ' + e.message, false);
+        }
+    }
+
+    async function stopTool(tool) {
+        currentTool = tool;
+        try {
+            await api('/api/tool/stop', 'POST', { tool });
+            showMsg('toolMsg', '已发送停止指令', true);
+        } catch (e) {
+            showMsg('toolMsg', '停止失败: ' + e.message, false);
+        }
+    }
+
+    loadConfig();
+    refreshStatus();
+    setInterval(refreshStatus, 2000);
+</script>
+
+</body>
+</html>

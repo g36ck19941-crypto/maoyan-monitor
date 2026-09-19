@@ -1,0 +1,59 @@
+url: ''
+movie_url: https://www.maoyan.com/films/248172
+movie_name: 复仇者联盟4：终局之战（加码臻享版）
+cinemas:
+- url: https://www.maoyan.com/cinema/1485
+  name: 万达影城（华南MALL-IMAXGT激光店）
+serverchan_send_key: ""   # 已移到 config.local.yaml（该文件在 .gitignore 中）
+interval_seconds: 30
+ticket_count: 5
+seat_rule: consecutive
+preferred_start_time: ''
+preferred_end_time: ''
+preferred_hall_keyword: ''
+preferred_date: '2026-09-27'
+max_search_dates: 3
+acceptable_radius: 5
+best_seat:
+- 9
+- 20
+seats: []
+auto_select_seat: true
+submit_order: true
+headless: false
+user_data_dir: ./profile
+keywords:
+- 选座购票
+- 立即购票
+- 购买
+- 预售
+- 点映
+max_radius: 5
+
+# 通知通道配置（P1：声音已启用；邮箱在后续阶段接入）
+notify:
+  sound:
+    enabled: true
+    max_seconds: 20          # 常规情况下响铃总时长
+    quiet_seconds: 3         # 静音时段内只短响
+    quiet_hours: "23:30-07:30"
+    volume: 100              # 语音音量 0-100（上限 100，再大要动系统音量）
+    beep: true               # 是否同时蜂鸣
+    beep_count: 4            # 每轮蜂鸣次数
+    beep_ms: 250             # 每声蜂鸣时长（毫秒）
+    beep_freq: 1100          # 主频（Hz）
+    beep_freq_alt: 1500      # 交替频（Hz）
+    gap_seconds: 0.2         # 语音与蜂鸣之间的间隔
+    speak_text: "猫眼提醒：{title}。请立即处理。"
+    test_seconds: 3          # python notifier.py --test sound 用的时长
+  routing:
+    sale:      { wechat: true, email: true, sound: true, sound_seconds: 20 }
+    seat_ok:   { wechat: true, email: true, sound: true, sound_seconds: 25 }
+    seat_fail: { wechat: true, email: true, sound: true, sound_seconds: 3 }
+    error:     { wechat: false, email: false, sound: false }
+
+# 排片探针：每轮把排片状态写进 CSV，用于事后分析放票规律
+probe:
+  enabled: true
+  csv_path: ./state/showtimes.csv
+  heartbeat_minutes: 10      # 状态没变化时也每 N 分钟留一行，保证时间线连续
