@@ -1,275 +1,244 @@
 # maoyan-monitor
 
-猫眼电影开售检测 + Server酱微信通知 + Playwright 自动占座脚本。
+**English** | [简体中文](README.zh-CN.md)
 
-- 检测特定电影在特定影院是否开售，包括点映、超前预售、正式预售。
-- 检测到后通过 Server酱 推送微信通知。
-- 可开启自动占座：按“最佳座位 → 周边扩散”自动选座并提交订单。
-- 不自动支付，占座后通知你尽快去支付。
+A Maoyan ticket-release watcher: on-sale detection, multi-channel notifications (WeChat / sound / email), and a Playwright auto-seat script.
 
-## 目录结构
+- Detects when a specific movie goes on sale at a specific cinema, including previews, advance presales and regular sales.
+- Notifies you the moment it is detected: WeChat via ServerChan, a local sound alarm, and email.
+- Optional auto seating: starts at your best seat, spirals outwards when it is taken, then submits the order.
+- Never pays automatically. Once a seat is grabbed it tells you to go pay.
+- Records showtime state into a CSV so the release pattern can be analysed afterwards.
+
+## Layout
 
 ```text
 maoyan-monitor/
-├── config.yaml              # 主配置：电影、影院、座位、通知路由、探针
-├── config.local.yaml        # 只放密钥（Server酱 Key、邮箱授权码），已在 .gitignore
-├── config_loader.py         # 配置加载：config.local.yaml 覆盖 config.yaml
-├── requirements.txt         # Python 依赖
-├── README.md                # 使用说明
-├── main.py                  # 主入口：轮询检测 + 通知分发 + 可选占座
-├── login.py                 # 手动登录一次，保存登录态
-├── maoyan_client.py         # Playwright 浏览器封装
-├── parser.py                # 解析是否开售 / 可购买场次
-├── probe.py                 # 排片探针：每轮把排片状态写进 CSV
-├── resolver.py              # 从电影页/影院页找场次链接（关键）
-├── showtime_selector.py     # 按时间段/影厅关键词选场次、切日期
-├── seat_selector.py         # 自动选座、连座、周边扩散、跨场次与跨天重试
-├── seat_map.py              # 获取并打印指定影厅的座位图
-├── test_seat.py             # 用已开售电影调试座位定位（重要）
-├── notifier.py              # 通知通道：Server酱 / 声音 / 邮件 + 事件路由
-├── state.py                 # 状态：notified（通知去重）与 ordered（下单成功）
-├── webui/                   # 本地可视化控制面板（Flask）
+├── config.yaml              # main config: movie, cinemas, seats, notify routing, probe
+├── config.local.yaml        # secrets only (ServerChan key, mailbox auth code); gitignored
+├── config_loader.py         # config loading: config.local.yaml overrides config.yaml
+├── requirements.txt         # Python dependencies
+├── README.md                # this file (English)
+├── README.zh-CN.md          # Chinese version
+├── main.py                  # entry point: polling loop + notification dispatch + optional seating
+├── login.py                 # one-off manual login, saves the session
+├── maoyan_client.py         # Playwright browser wrapper
+├── parser.py                # parses on-sale state / purchasable showtimes
+├── probe.py                 # showtime probe: appends showtime state to a CSV
+├── resolver.py              # finds the showtime URL from movie/cinema pages (key piece)
+├── showtime_selector.py     # picks a showtime by time window or hall keyword, switches date
+├── seat_selector.py         # seat picking, consecutive blocks, spiral search, cross-showtime and cross-day retry
+├── seat_map.py              # prints the seat map of a hall
+├── test_seat.py             # debug seat selectors using a movie already on sale (important)
+├── notifier.py              # notification channels: ServerChan / sound / email + event routing
+├── state.py                 # state: notified (notification dedupe) and ordered (order submitted)
+├── webui/                   # local control panel (Flask)
 │   ├── app.py
 │   └── templates/index.html
 ├── state/                   # notified.txt / ordered.txt / showtimes.csv
-└── logs/                    # 运行日志
+└── logs/                    # run logs
 ```
 
-## 快速开始
+## Quick start
 
-### 1. 安装依赖
+### 1. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 playwright install chromium
 ```
 
-### 2. 手动登录一次猫眼
+### 2. Log in to Maoyan once
 
 ```bash
 python login.py
 ```
 
-会弹出浏览器，你手动扫码/短信登录猫眼。
-登录完成后回到终端按回车，登录态会保存在 `./profile` 目录。
+A browser opens; scan the QR code or log in with SMS as usual. When you are done, go back to the terminal and press Enter. The session is stored in `./profile`.
 
-### 3. 修改配置
+### 3. Edit the config
 
-编辑 `config.yaml`：
+Open `config.yaml`:
 
-- 如果已经能看到“某电影在某影院”的场次页 URL，就直接填 `url`：
+- If you already have the combined showtime URL for "this movie at this cinema", put it in `url`:
   ```text
   https://www.maoyan.com/cinemas/12345?movieId=6789
   ```
-  其中 `12345` 是影院 ID，`6789` 是电影 ID
-- 如果拿不到二合一 URL 也没关系，把 `url` 留空，填写两个分开的入口：
+  where `12345` is the cinema ID and `6789` is the movie ID.
+- If you cannot get that combined URL, leave `url` empty and fill in the two separate entry points:
   ```text
-  电影简介：https://www.maoyan.com/films/6789
-  影院简介：https://www.maoyan.com/cinemas/12345
+  movie page:   https://www.maoyan.com/films/6789
+  cinema page:  https://www.maoyan.com/cinemas/12345
   ```
-  脚本会从这两个 URL 中提取电影 ID 和影院 ID，自动拼出场次页 URL：
+  The script extracts both IDs and builds the showtime URL itself:
   ```text
   https://www.maoyan.com/cinemas/12345?movieId=6789
   ```
-  即使还没排片，这个页面通常也能打开，只是显示暂无场次，脚本会持续轮询。
-- 电影名、影院名都可以留空，脚本会从 URL 页面自动获取；支持多个影院列表 cinemas；填写 Server酱 SendKey
-- 填写 Server酱 SendKey
-- 填写最佳座位，例如 `[7, 5]` 表示第 7 排 5 座
-- 可选填写场次时间偏好：
+  That page normally opens even before showtimes are published, showing "no showtimes yet"; the script keeps polling.
+- Movie name and cinema name can be left empty: the script reads them from the pages. Multiple cinemas are supported through the `cinemas` list.
+- Fill in the best seat, e.g. `[7, 5]` means row 7, seat 5.
+- Optional showtime preferences:
   - `preferred_start_time: "18:00"`
   - `preferred_end_time: "21:00"`
-  - 脚本只在这个时间段内选场次
-- 可选填写影厅关键词：
+  - only showtimes inside that window are considered.
+- Optional hall keyword:
   - `preferred_hall_keyword: "IMAX"`
-  - 脚本只选包含 IMAX 的影厅场次
-- 可选填写优先日期 `preferred_date: "2026-09-02"`（留空则从今天开始；填写后只会在该日期开放购票时提醒，不会因为今天/明天已开售而误报）；可选填写自动顺延天数 `max_search_dates: 3`（当天无座时自动尝试下一天）；按需修改轮询间隔，默认 600 秒（10 分钟）
+  - only halls containing that keyword are considered.
+- Optional target date `preferred_date: "2026-09-02"`. When set, it alerts only for that date, so showtimes already on sale today or tomorrow will not produce a false alarm. Optional `max_search_dates: 3` rolls over to the next day when the current day has no free seats. Tune `interval_seconds` as needed; the default is 600 seconds.
+- Notification routing, sound and mail settings live under `notify:`; secrets go into `config.local.yaml`.
 
-### 4. 启动监控
+### 4. Start watching
 
 ```bash
 python main.py
 ```
 
-## 任务顺序 / 工作流
+## Workflow
 
-1. **准备阶段**
-   - 注册 Server酱，拿到 SendKey
-   - 如果能拿到“目标电影在目标影院”的场次页 URL，就填 `url`；如果拿不到，就分别填 `movie_url` 和 `cinema_url`，脚本会自动拼接场次页 URL
-   - 确认最佳座位排/列
+1. **Preparation**
+   - Create a ServerChan account and copy the SendKey.
+   - Provide either the combined `url`, or `movie_url` plus `cinema_url` so the script can build it.
+   - Decide the best row and seat.
+2. **Login**
+   - Run `login.py`, log in manually, and the session is saved.
+3. **Watching**
+   - Run `main.py`. Every `interval_seconds` it either visits the showtime page directly (when `url` is set) or looks for the showtime link on the movie or cinema page first.
+   - It then parses the page for keywords such as 选座购票 / 立即购票 / 预售 / 点映 (select seats / buy now / presale / preview).
+4. **On-sale trigger**
+   - On detection it fires the `sale` event: WeChat push, a long sound alarm and an email.
+   - With `auto_select_seat` enabled it goes straight into seat selection.
+5. **Auto seating**
+   - Tries your best seat first, then spirals outwards if it is taken.
+   - With `seat_rule: consecutive` it looks for a consecutive block close to the target seat.
+   - On failure it retries the next showtime of the same day, then the next day, up to `max_search_dates`.
+   - It submits the order when `submit_order` is true, and never pays.
+6. **You finish it**
+   - After a "seat grabbed" notification, open the Maoyan app or website and pay.
+   - After a "seating failed" notification, buy manually.
 
-2. **登录阶段**
-   - 运行 `login.py`，手动登录并保存登录态
+## Debugging auto seating before release day
 
-3. **监控阶段**
-   - 运行 `main.py`
-   - 脚本每 `interval_seconds` 秒执行一次：
-      - 若配置了 `url`：直接访问场次页
-      - 若只配置了 `movie_url` / `cinema_url`：先到电影页或影院页找“场次链接”，找到后再进入场次页
-   - 解析页面中是否出现“选座购票 / 立即购票 / 预售 / 点映”等关键词
-
-4. **开售触发**
-   - 检测到开售 → 立即 Server酱 推送微信
-   - 若开启 `auto_select_seat`，自动进入选座
-
-5. **自动占座**
-   - 先点最佳座位
-   - 若被占用，按螺旋顺序尝试周边座位
-   - 选中后点击“确认选座”
-   - 可选点击“提交订单”，不支付
-   - 成功/失败均推送微信通知
-
-6. **人工收尾**
-   - 收到“占座成功”通知后，打开猫眼 App/网页完成支付
-   - 若收到“占座失败”，立即人工抢票
-
-## 如何提前调试自动占座（不需要等目标电影开售）
-
-自动占座不需要等到目标电影真正开售才调试。
-
-你可以用同一家影院里“已经开售/预售的其他电影”来调试，因为座位图 UI 通常是同一套。
+You do not have to wait for the target movie. Use another movie that is already on sale at the same cinema: the seat-map UI is usually the same.
 
 ```bash
 python test_seat.py "https://www.maoyan.com/cinemas/12345?movieId=6789"
 ```
 
-把 URL 换成任意一部已经开售的电影 + 同一家影院的场次页。
+Replace the URL with any on-sale movie at the same cinema.
 
-如果提示 `profile` 被占用（例如 main.py 正在运行），可以给测试脚本单独用一个登录目录：
+If it reports that `profile` is in use because `main.py` is running, give the test script its own profile directory:
 
 ```bash
-# 先单独登录一次测试 profile
+# log in once for the test profile
 python login.py profile_test
 
-# 再运行测试
+# then run the test
 python test_seat.py "https://www.maoyan.com/cinemas/12345?movieId=6789" profile_test
 ```
 
-`test_seat.py` 会：
+`test_seat.py` will:
 
-1. 打开该场次页
-2. 根据 `config.yaml` 里的时间段/影厅关键词自动选择场次
-3. 自动点击“选座购票”
-4. 输出座位区域的选择器数量
-5. 输出第一个座位元素的 HTML
-6. 尝试用当前 `seat_selector.py` 定位你的最佳座位
+1. open the showtime page;
+2. pick a showtime using the time window and hall keyword from `config.yaml`;
+3. click "select seats";
+4. print how many seat elements each candidate selector matches;
+5. print the HTML of the first seat element;
+6. try to locate your best seat with the current `seat_selector.py`.
 
-然后把输出的 HTML 发给我，我帮你把自动占座选择器调成真实可用的版本。
+With that HTML the selectors can be tuned until they really work, so on release day the script is already armed instead of being debugged under pressure.
 
-这样等目标电影一开售，脚本已经处于“调好待命”状态，而不是临时再调。
+## Inspecting a hall's seat map
 
-## 查看某影厅的座位图
-
-如果你想知道某个 IMAX/激光厅哪些座位好、哪些可选，可以先获取座位图：
+To see which seats in an IMAX/laser hall are free:
 
 ```bash
 python seat_map.py "https://www.maoyan.com/cinemas/12345?movieId=6789"
 ```
 
-脚本会：
-
-1. 根据时间段和影厅关键词自动选场次
-2. 进入座位图
-3. 输出类似这样的座位矩阵：
+It picks a showtime by time window and hall keyword, enters the seat map, and prints a matrix like:
 
 ```text
-排\列   1   2   3   4   5
-  7     .   .   X   .   .
-  8     .   .   .   X   .
+Row\Col  1   2   3   4   5
+  7      .   .   X   .   .
+  8      .   .   .   X   .
 ```
 
-- `.` 表示可选
-- `X` 表示已占/不可选
+- `.` available
+- `X` taken or unavailable
 
-同时会把截图保存到：
+A screenshot is saved to `logs/seat_map.png`.
 
-```text
-logs/seat_map.png
-```
+## Local control panel
 
-这样你可以直接看图，也可以看文字矩阵来选最佳座位。
-
-## 本地可视化控制面板
-
-可以用网页面板统一管理配置、监控和选座工具。
-
-安装依赖后运行：
+A web panel manages the config, the watcher and the seat tools:
 
 ```bash
 python webui/app.py
 ```
 
-然后浏览器打开：
+then open `http://127.0.0.1:5000`.
 
-```text
-http://127.0.0.1:5000
-```
+- edit and save `config.yaml`
+- start / stop the `main.py` watcher
+- run `seat_map.py` to fetch a seat map
+- run `test_seat.py` to debug seat selectors
+- reset the notification dedupe markers
+- follow the logs live
 
-控制面板功能：
+## Notification channels (WeChat / sound / email)
 
-- 编辑并保存 `config.yaml`
-- 一键启动 / 停止 `main.py` 监控
-- 一键运行 `seat_map.py` 获取座位图
-- 一键运行 `test_seat.py` 调试座位定位
-- 一键重置重复通知标记
-- 实时查看后台日志
+Each event fans out to several channels according to its type. The routing table lives in `notify.routing` inside `config.yaml`; credentials live in `config.local.yaml`.
 
-## 通知通道（微信 / 声音 / 邮件）
-
-一次事件会同时走多条通道，按事件类型分发。路由表在 `config.yaml` 的 `notify.routing`，凭据在 `config.local.yaml`。
-
-| 事件 | 触发时机 | 微信 | 声音 | 邮件 | 优先级 |
+| Event | When | WeChat | Sound | Email | Priority |
 |---|---|---|---|---|---|
-| `sale` | 检测到目标场次可购票 | 是 | 20 秒长响 | 是 | 2 |
-| `seat_ok` | 自动占座、下单成功 | 是 | 25 秒长响 | 是 | 3 |
-| `seat_fail` | 占座失败（下一轮会自动重试） | 是 | 3 秒短响 | 是 | 1 |
-| `error` | 页面加载等异常 | 否 | 否 | 否 | — |
+| `sale` | target showtime became purchasable | yes | 20 s alarm | yes | 2 |
+| `seat_ok` | seat grabbed, order submitted | yes | 25 s alarm | yes | 3 |
+| `seat_fail` | seating failed (retried next round) | yes | 3 s beep | yes | 1 |
+| `error` | page load and similar failures | no | no | no | - |
 
-- **微信**：Server酱，配置项 `serverchan_send_key`。
-- **声音**：`winsound` 蜂鸣加 PowerShell `System.Speech` 中文播报，不需要任何凭据。`volume`、`beep_count`、`beep_ms`、`beep_freq` 可调；`quiet_hours` 时段内自动降成短响。
-- **抢占**：高优先级事件会打断正在播放的响声，例如占座成功的语音会打断开售的长响；同优先级或更低则跳过。
-- **邮件**：标准库 `smtplib`。当前用 QQ 邮箱（`smtp.qq.com:465`），凭据填在 `config.local.yaml` 的 `email` 段。
-- **`error` 只写日志**：网络抖动造成的页面加载失败不推送，免得把真正该看的开售通知淹掉。
+- **WeChat**: ServerChan, key `serverchan_send_key`.
+- **Sound**: `winsound` beeps plus a Chinese announcement through PowerShell `System.Speech`; no credentials needed. Tune `volume`, `beep_count`, `beep_ms`, `beep_freq`; inside `quiet_hours` the alarm is shortened automatically.
+- **Preemption**: a higher-priority event interrupts whatever is playing, so the seat-grabbed announcement cuts off the long on-sale alarm; equal or lower priority is skipped.
+- **Email**: standard-library `smtplib`, currently configured for QQ Mail (`smtp.qq.com:465`); credentials go into the `email` section of `config.local.yaml`.
+- **`error` is log-only**: page-load failures caused by network flakiness are not pushed, so they cannot bury the on-sale notification you actually care about.
 
-自检命令：
+Self-checks:
 
 ```powershell
-python notifier.py --test route    # 打印四个事件的路由决策
-python notifier.py --test sound    # 响一声并念一句中文
-python notifier.py --test email    # 发一封测试邮件
+python notifier.py --test route    # print the routing decision for all four events
+python notifier.py --test sound    # beep once and speak one sentence
+python notifier.py --test email    # send a test email
 ```
 
-邮件通道依赖 SMTP 直连。如果代理是全局转发模式，境外节点通常封掉 25/465/587，邮件会失败（微信与声音不受影响）；国内邮箱建议在代理里给它加一条 DIRECT 规则。
+The email channel needs a direct SMTP connection. If your proxy forwards everything through an overseas node, such nodes usually block ports 25/465/587 and mail will fail (WeChat and sound are unaffected); for a domestic mailbox, add a DIRECT rule for it in the proxy.
 
-## 排片探针（记录放票规律）
+## Showtime probe (recording release patterns)
 
-`probe.py` 每轮把排片状态写一行进 `state/showtimes.csv`，用来回答"票是几点几分放出来的、日期栏从哪天开始出现目标日期"。
+Every round `probe.py` appends one row of showtime state to `state/showtimes.csv`, answering "at what minute did tickets appear, and when did the target date first show up in the date bar".
 
-只在状态变化时写，另外每 `heartbeat_minutes` 分钟补一行，保证时间线连续（30 秒轮询一天也不会把 CSV 撑大）。
+Rows are written only when the state changes, plus one heartbeat row every `heartbeat_minutes`, so even a 30-second poll keeps the timeline continuous without bloating the file.
 
-| 字段 | 含义 |
+| Field | Meaning |
 |---|---|
-| `ts` | 记录时刻 |
-| `stage` | 本轮停在哪一步：`date_not_open` / `movie_missing` / `no_sessions` / `detected` / `seat_ok` / `seat_fail` / `exception` |
-| `movie_found` | 页面正文里有没有目标片名 |
-| `date_ok` | 目标日期的日期栏是否点到 |
-| `sessions` | 解析出的可购票场次数 |
-| `keywords` | 命中的关键词 |
-| `date_bar_items` | 日期栏条目数 |
-| `date_bar_last` | 日期栏最后一项，可看出可售窗口的边界 |
-| `target_date_present` | 目标日期是否已出现在日期栏 |
-| `error` | 异常信息（有异常时才有） |
-| `url` | 本轮访问的场次页 |
+| `ts` | when the row was recorded |
+| `stage` | where the round stopped: `date_not_open` / `movie_missing` / `no_sessions` / `detected` / `seat_ok` / `seat_fail` / `exception` |
+| `movie_found` | whether the page body contains the target title |
+| `date_ok` | whether the target date tab was clicked |
+| `sessions` | how many purchasable showtimes were parsed |
+| `keywords` | which keywords matched |
+| `date_bar_items` | number of entries in the date bar |
+| `date_bar_last` | last entry, showing the edge of the bookable window |
+| `target_date_present` | whether the target date already appears in the date bar |
+| `error` | exception text, when there is one |
+| `url` | showtime page visited this round |
 
-用法：双击 CSV 用 Excel 打开（编码 `utf-8-sig`，不会乱码），按 `stage` 变化的时间点读放票时刻。想看日期栏何时开始出现目标日期，筛 `target_date_present=True` 的第一行即可。
+Usage: open the CSV in Excel (it is `utf-8-sig`, so no mojibake) and read the release moment from the timestamps where `stage` changes. To find when the date bar started showing your target date, take the first row with `target_date_present=True`.
 
-## 重要提示
+## Notes
 
-- 猫眼页面结构可能变化，`parser.py` 和 `seat_selector.py` 里的选择器需要按实际页面调整。
-- 如果座位图是 Canvas/图片，`_find_seat` 的 DOM 定位方式会失效，需要改成截图 + 坐标点击。
-- 轮询频率建议 60~600 秒，不要太激进。
-- Server酱 SendKey 不要提交到公开仓库。
-- 本脚本仅用于个人购票，请勿用于倒票、大量刷票。
-
-- `state/notified.txt` 只负责通知不重复发，`state/ordered.txt` 才代表下单成功。占座失败不会被永久跳过，下一轮会继续重试同一场次。
-- 邮件通道需要 SMTP 直连；全局代理模式下的境外节点通常封 SMTP 端口。
-- `config.local.yaml` 放密钥，已在 `.gitignore` 中；`config.yaml` 里不要写密钥。
+- Maoyan's markup can change; the selectors in `parser.py` and `seat_selector.py` may need adjusting against the real page.
+- If the seat map ever becomes a Canvas or image, the DOM-based `_find_seat` stops working and needs screenshot-plus-coordinate clicking.
+- A polling interval of 60-600 seconds is reasonable; do not be too aggressive.
+- Keep secrets out of the repository: they belong in `config.local.yaml`, which is gitignored.
+- `state/notified.txt` only deduplicates notifications, while `state/ordered.txt` means an order was actually submitted. A failed seating attempt is never skipped forever: the same showtime is retried on the next round.
+- This script is for personal ticket buying. Do not use it for scalping or bulk purchasing.
